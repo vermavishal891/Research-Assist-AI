@@ -13,6 +13,7 @@ The app does **not** build websites, deploy ideas, publish content, or execute b
 - DataForSEO keyword metrics
 - SerpAPI Google SERP collection
 - OpenAI structured JSON outputs for seed expansion and memo drafting
+- Optional Sentry error and request instrumentation
 - Recharts dashboard charts
 - Node test runner smoke tests, Vitest-ready unit setup, Playwright-ready e2e setup
 
@@ -38,7 +39,21 @@ SERPAPI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
 ```
 
-For local dry runs without external provider calls, use the “Use mock providers” checkbox in the Start Research or Auto Discovery pages.
+For local dry runs without external provider calls, use the "Use mock providers" checkbox in the Start Research or Auto Discovery pages.
+
+For optional production observability, set these Sentry variables. The app builds and runs without them:
+
+```env
+NEXT_PUBLIC_SENTRY_DSN=
+SENTRY_DSN=
+SENTRY_ORG=
+SENTRY_PROJECT=
+SENTRY_AUTH_TOKEN=
+SENTRY_TRACES_SAMPLE_RATE=0.1
+NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0.1
+APP_ENV=development
+NEXT_PUBLIC_APP_ENV=development
+```
 
 ## Commands
 

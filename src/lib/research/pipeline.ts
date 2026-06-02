@@ -4,6 +4,7 @@ import { getPrisma } from "@/lib/db";
 import { buildInvestorMemo } from "@/lib/core/reports.mjs";
 import { classifyDataQuality } from "@/lib/core/validation.mjs";
 import { clusterSignals } from "@/lib/research/clustering";
+import { classifyProviderError, summarizeProviderUsage } from "@/lib/research/provider-usage";
 import { createProviders, detectSignalsForProviderData, type DetectedSignal } from "@/lib/research/providers";
 
 const AUTO_CATEGORIES = [
@@ -58,6 +59,82 @@ export function isDatabaseConfigured() {
   return Boolean(url && !url.includes("replace_me") && !url.includes("project-ref"));
 }
 
+async function getScoringWeights(prisma: ReturnType<typeof getPrisma>) {
+  const settings = await prisma.scoringSettings.upsert({
+    where: { name: "default" },
+    create: { name: "default" },
+    update: {},
+  });
+
+  return {
+    demand: settings.demandWeight,
+    competitionAdvantage: settings.competitionAdvantageWeight,
+    commercial: settings.commercialWeight,
+    contentGap: settings.contentGapWeight,
+    executionFeasibility: settings.executionFeasibilityWeight,
+  };
+}
+
+async function logProviderUsage({
+  prisma,
+  researchRunId,
+  provider,
+  endpoint,
+  requestCount,
+  status,
+}: {
+  prisma: ReturnType<typeof getPrisma>;
+  researchRunId: string;
+  provider: ProviderName;
+  endpoint: string;
+  requestCount: number;
+  status: "success" | "rate_limited" | "timeout" | "invalid_response" | "failed";
+}) {
+  const usage = summarizeProviderUsage({ provider, endpoint, requestCount, status });
+  await prisma.apiUsageLog.create({
+    data: {
+      researchRunId,
+      provider: usage.provider,
+      endpoint: usage.endpoint,
+      requestCount: usage.requestCount,
+      status: usage.status,
+      estimatedCost: usage.estimatedCost,
+    },
+  });
+}
+
+async function runProviderStep<T>({
+  prisma,
+  researchRunId,
+  provider,
+  endpoint,
+  requestCount,
+  execute,
+}: {
+  prisma: ReturnType<typeof getPrisma>;
+  researchRunId: string;
+  provider: ProviderName;
+  endpoint: string;
+  requestCount: number;
+  execute: () => Promise<T>;
+}) {
+  try {
+    const result = await execute();
+    await logProviderUsage({ prisma, researchRunId, provider, endpoint, requestCount, status: "success" });
+    return result;
+  } catch (error) {
+    await logProviderUsage({
+      prisma,
+      researchRunId,
+      provider,
+      endpoint,
+      requestCount,
+      status: classifyProviderError(error),
+    });
+    throw error;
+  }
+}
+
 export async function startManualResearch(input: StartResearchInput) {
   if (!input.topic?.trim()) {
     throw new Error("Topic is required.");
@@ -85,6 +162,7 @@ export async function startManualResearch(input: StartResearchInput) {
 
   try {
     const providers = createProviders(providerMode(input));
+    const scoringWeights = await getScoringWeights(prisma);
     const context = {
       topic: input.topic,
       category: input.category,
@@ -93,7 +171,14 @@ export async function startManualResearch(input: StartResearchInput) {
       maxKeywords,
     };
 
-    const seedCandidates = await providers.ai.generateSeedCandidates(context);
+    const seedCandidates = await runProviderStep({
+      prisma,
+      researchRunId: run.id,
+      provider: providers.ai.name,
+      endpoint: "seed-expansion",
+      requestCount: 1,
+      execute: () => providers.ai.generateSeedCandidates(context),
+    });
     const seeds = seedCandidates.map((candidate) => candidate.seed).slice(0, maxKeywords);
 
     await prisma.seedKeyword.createMany({
@@ -106,7 +191,14 @@ export async function startManualResearch(input: StartResearchInput) {
       })),
     });
 
-    const keywordMetrics = await providers.keywords.fetchKeywordMetrics(context, seeds);
+    const keywordMetrics = await runProviderStep({
+      prisma,
+      researchRunId: run.id,
+      provider: providers.keywords.name,
+      endpoint: "keyword-metrics",
+      requestCount: Math.max(1, seeds.length),
+      execute: () => providers.keywords.fetchKeywordMetrics(context, seeds),
+    });
     await prisma.keywordMetric.createMany({
       data: keywordMetrics.map((metric) => ({
         researchRunId: run.id,
@@ -123,10 +215,15 @@ export async function startManualResearch(input: StartResearchInput) {
       })),
     });
 
-    const serpResults = await providers.serp.fetchSerpResults(
-      context,
-      keywordMetrics.map((metric) => metric.keyword),
-    );
+    const serpKeywords = keywordMetrics.map((metric) => metric.keyword);
+    const serpResults = await runProviderStep({
+      prisma,
+      researchRunId: run.id,
+      provider: providers.serp.name,
+      endpoint: "search",
+      requestCount: Math.max(1, Math.min(5, serpKeywords.length, maxKeywords)),
+      execute: () => providers.serp.fetchSerpResults(context, serpKeywords),
+    });
     await prisma.serpResult.createMany({
       data: serpResults.map((result) => ({
         researchRunId: run.id,
@@ -175,6 +272,7 @@ export async function startManualResearch(input: StartResearchInput) {
       region,
       signals: signals as DetectedSignal[],
       keywordMetrics,
+      scoringWeights,
     });
     const clusterRecord = await prisma.opportunityCluster.create({
       data: {
@@ -251,11 +349,19 @@ export async function startManualResearch(input: StartResearchInput) {
       ...(cluster.totalVolume === null ? ["total monthly search volume"] : []),
       ...(cluster.avgCpc === null ? ["average CPC"] : []),
     ];
-    const aiDraft = await providers.ai.draftMemo({
-      cluster,
-      scoreBreakdown: scoreRecord,
-      evidenceItems,
-      missingData,
+    const aiDraft = await runProviderStep({
+      prisma,
+      researchRunId: run.id,
+      provider: providers.ai.name,
+      endpoint: "memo-draft",
+      requestCount: 1,
+      execute: () =>
+        providers.ai.draftMemo({
+          cluster,
+          scoreBreakdown: scoreRecord,
+          evidenceItems,
+          missingData,
+        }),
     });
     const memoJson = (buildInvestorMemo as (input: unknown) => Record<string, unknown> & {
       measured_facts: unknown;

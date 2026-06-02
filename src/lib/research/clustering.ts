@@ -1,5 +1,35 @@
 import { calculateConfidenceScore, calculateOpportunityScore, calculateRiskPenalty } from "@/lib/core/scoring.mjs";
 
+type ScoringWeights = {
+  demand: number;
+  competitionAdvantage: number;
+  commercial: number;
+  contentGap: number;
+  executionFeasibility: number;
+};
+
+const calculateScore = calculateOpportunityScore as (input: {
+  demandScore: number;
+  competitionAdvantageScore: number;
+  commercialScore: number;
+  contentGapScore: number;
+  executionFeasibilityScore: number;
+  riskPenalty: number;
+}, weights?: ScoringWeights) => {
+  formulaVersion: string;
+  weights: ScoringWeights;
+  components: {
+    demandScore: number;
+    competitionAdvantageScore: number;
+    commercialScore: number;
+    contentGapScore: number;
+    executionFeasibilityScore: number;
+  };
+  riskPenalty: number;
+  baseScore: number;
+  finalScore: number;
+};
+
 export type ClusterSignalInput = {
   signalType: string;
   title: string;
@@ -24,12 +54,14 @@ export function clusterSignals({
   region,
   signals,
   keywordMetrics,
+  scoringWeights,
 }: {
   topic: string;
   category?: string | null;
   region: string;
   signals: ClusterSignalInput[];
   keywordMetrics: KeywordMetric[];
+  scoringWeights?: ScoringWeights;
 }) {
   const totalVolume = keywordMetrics.reduce((sum, metric) => sum + (metric.searchVolume ?? 0), 0) || null;
   const cpcs = keywordMetrics.map((metric) => metric.cpcHigh).filter((value): value is number => value !== null);
@@ -53,14 +85,17 @@ export function clusterSignals({
     monetizationClarity: avgCpc !== null ? 70 : 35,
     executionComplexity: signalTypes.has("tool_gap") ? 65 : 45,
   });
-  const score = calculateOpportunityScore({
-    demandScore: totalVolume ? Math.min(100, totalVolume / 20) : 25,
-    competitionAdvantageScore: avgDifficulty !== null ? Math.max(0, 100 - avgDifficulty) : 40,
-    commercialScore: avgCpc !== null ? Math.min(100, avgCpc * 20) : 25,
-    contentGapScore: signalTypes.has("tool_gap") || signalTypes.has("content_gap") ? 75 : 35,
-    executionFeasibilityScore: signalTypes.has("tool_gap") ? 58 : 70,
-    riskPenalty,
-  });
+  const score = calculateScore(
+    {
+      demandScore: totalVolume ? Math.min(100, totalVolume / 20) : 25,
+      competitionAdvantageScore: avgDifficulty !== null ? Math.max(0, 100 - avgDifficulty) : 40,
+      commercialScore: avgCpc !== null ? Math.min(100, avgCpc * 20) : 25,
+      contentGapScore: signalTypes.has("tool_gap") || signalTypes.has("content_gap") ? 75 : 35,
+      executionFeasibilityScore: signalTypes.has("tool_gap") ? 58 : 70,
+      riskPenalty,
+    },
+    scoringWeights,
+  );
 
   return {
     title: `${topic} opportunity cluster`,
