@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ResearchMode {
+  manual
+  auto_discovery
+  deeper_research
+  watchlist_refresh
+}
+
+enum ResearchStatus {
+  queued
+  running
+  partial
+  completed
+  failed
+}
+
+enum DataQualityState {
+  verified
+  partial
+  conflicting
+  stale
+  insufficient_evidence
+}
+
+enum SignalType {
+  rising_demand
+  low_competition
+  high_cpc
+  weak_serp
+  content_gap
+  tool_gap
+  local_gap
+  forum_ranking
+  long_tail_cluster
+  commercial_intent
+  underserved_audience
+  seasonal_spike
+  competitor_weakness
+}
+
+enum DecisionStatus {
+  new
+  approved
+  rejected
+  watchlisted
+  needs_more_research
+}
+
+enum ProviderName {
+  dataforseo
+  serpapi
+  openai
+  supabase
+  mock
+}
+
+enum ProviderHealthStatus {
+  healthy
+  degraded
+  failed
+  unknown
+}
+
+model ResearchRun {
+  id                 String              @id @default(cuid())
+  mode               ResearchMode
+  seedTopic          String?
+  category           String?
+  region             String              @default("IN")
+  language           String              @default("en")
+  depth              String              @default("standard")
+  maxKeywords        Int                 @default(25)
+  minSearchVolume    Int?
+  maxCompetition     Float?
+  monetizationPref   String?
+  status             ResearchStatus      @default(queued)
+  dataQualityState   DataQualityState    @default(partial)
+  errorMessage        String?
+  startedAt          DateTime            @default(now())
+  completedAt        DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  rawApiResponses    RawApiResponse[]
+  seedKeywords       SeedKeyword[]
+  keywordMetrics     KeywordMetric[]
+  serpResults        SerpResult[]
+  marketSignals      MarketSignal[]
+  opportunityClusters OpportunityCluster[]
+  apiUsageLogs       ApiUsageLog[]
+
+  @@index([status, createdAt])
+  @@index([mode, category])
+}
+
+model SeedKeyword {
+  id             String      @id @default(cuid())
+  researchRunId  String
+  keyword        String
+  source         String
+  reason         String?
+  intent         String?
+  createdAt      DateTime    @default(now())
+  researchRun    ResearchRun @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+
+  @@index([researchRunId])
+}
+
+model RawApiResponse {
+  id              String       @id @default(cuid())
+  researchRunId   String?
+  provider        ProviderName
+  endpoint        String
+  requestHash     String
+  responseSummary Json
+  rawJson         Json?
+  status          String
+  fetchedAt       DateTime     @default(now())
+  researchRun     ResearchRun? @relation(fields: [researchRunId], references: [id], onDelete: SetNull)
+
+  @@index([provider, fetchedAt])
+  @@index([researchRunId])
+}
+
+model KeywordMetric {
+  id             String       @id @default(cuid())
+  researchRunId  String
+  keyword        String
+  region         String       @default("IN")
+  language       String       @default("en")
+  searchVolume   Int?
+  cpcLow         Float?
+  cpcHigh        Float?
+  competition    Float?
+  difficulty     Float?
+  intent         String?
+  source         ProviderName
+  fetchedAt      DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  researchRun    ResearchRun  @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+
+  @@index([researchRunId])
+  @@index([keyword, region, language])
+}
+
+model SerpResult {
+  id              String       @id @default(cuid())
+  researchRunId   String
+  keyword         String
+  rank            Int
+  title           String
+  url             String
+  domain          String
+  snippet         String?
+  contentType     String
+  serpFeatureType String?
+  source          ProviderName
+  fetchedAt       DateTime     @default(now())
+  researchRun     ResearchRun  @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+
+  @@index([researchRunId])
+  @@index([keyword, rank])
+}
+
+model MarketSignal {
+  id                String           @id @default(cuid())
+  researchRunId     String
+  signalType        SignalType
+  title             String
+  description       String
+  category          String?
+  region            String           @default("IN")
+  language          String           @default("en")
+  source            ProviderName     @default(mock)
+  evidenceJson      Json
+  measuredDataJson  Json
+  estimatedDataJson Json?
+  assumptionsJson   Json?
+  confidenceScore   Float
+  riskScore         Float
+  signalStrength    Float
+  dataFreshness     String
+  validationState   DataQualityState @default(partial)
+  decisionStatus    DecisionStatus   @default(new)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  researchRun       ResearchRun      @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  opportunityLinks  OpportunitySignal[]
+
+  @@index([researchRunId])
+  @@index([signalType, confidenceScore])
+}
+
+model OpportunityCluster {
+  id                 String              @id @default(cuid())
+  researchRunId      String
+  title              String
+  category           String?
+  region             String              @default("IN")
+  primaryIntent      String
+  totalVolume        Int?
+  avgCpc             Float?
+  avgDifficulty      Float?
+  signalCount        Int                 @default(0)
+  validationState    DataQualityState    @default(partial)
+  decisionStatus     DecisionStatus      @default(new)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  researchRun        ResearchRun         @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  scoreBreakdown     ScoreBreakdown?
+  opportunityMemo    OpportunityMemo?
+  signalLinks        OpportunitySignal[]
+  contentGaps        ContentGap[]
+  competitors        Competitor[]
+  watchlistItems     WatchlistItem[]
+
+  @@index([researchRunId])
+  @@index([decisionStatus, createdAt])
+}
+
+model OpportunitySignal {
+  opportunityClusterId String
+  marketSignalId       String
+  opportunityCluster   OpportunityCluster @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+  marketSignal         MarketSignal       @relation(fields: [marketSignalId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityClusterId, marketSignalId])
+}
+
+model ScoreBreakdown {
+  id                            String             @id @default(cuid())
+  opportunityClusterId           String             @unique
+  demandScore                    Float
+  competitionAdvantageScore      Float
+  commercialScore                Float
+  contentGapScore                Float
+  executionFeasibilityScore      Float
+  riskPenalty                    Float
+  finalScore                     Float
+  confidenceScore                Float
+  riskScore                      Float
+  formulaVersion                 String
+  inputsJson                     Json
+  createdAt                      DateTime           @default(now())
+  opportunityCluster             OpportunityCluster @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+}
+
+model OpportunityMemo {
+  id                       String             @id @default(cuid())
+  opportunityClusterId      String             @unique
+  memoJson                  Json
+  measuredFactsJson         Json
+  calculatedEstimatesJson   Json
+  assumptionsJson           Json
+  rawAiOutputJson           Json?
+  validatedAiOutputJson     Json?
+  recommendation            String
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  opportunityCluster        OpportunityCluster @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+  decisionRecords           DecisionRecord[]
+}
+
+model DecisionRecord {
+  id                String          @id @default(cuid())
+  opportunityMemoId String
+  decision          DecisionStatus
+  notes             String?
+  decidedAt         DateTime        @default(now())
+  opportunityMemo   OpportunityMemo @relation(fields: [opportunityMemoId], references: [id], onDelete: Cascade)
+}
+
+model WatchlistItem {
+  id                   String             @id @default(cuid())
+  opportunityClusterId  String
+  status               DecisionStatus      @default(watchlisted)
+  nextReviewAt         DateTime?
+  lastScore            Float?
+  currentScore         Float?
+  notes                String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  opportunityCluster   OpportunityCluster  @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextReviewAt])
+}
+
+model EvidenceItem {
+  id          String   @id @default(cuid())
+  parentType  String
+  parentId    String
+  sourceType  String
+  sourceName  String
+  metricName  String
+  value       Json
+  unit        String?
+  url         String?
+  timestamp   DateTime @default(now())
+  confidence  Float
+  notes       String?
+
+  @@index([parentType, parentId])
+}
+
+model Competitor {
+  id                    String             @id @default(cuid())
+  opportunityClusterId   String
+  domain                String
+  url                   String
+  title                 String
+  weaknessSummary       String?
+  contentType           String?
+  rank                  Int?
+  opportunityCluster    OpportunityCluster @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+}
+
+model ContentGap {
+  id                    String             @id @default(cuid())
+  opportunityClusterId   String
+  gapType               String
+  description           String
+  evidenceJson          Json
+  opportunityCluster    OpportunityCluster @relation(fields: [opportunityClusterId], references: [id], onDelete: Cascade)
+}
+
+model ApiUsageLog {
+  id            String       @id @default(cuid())
+  researchRunId String?
+  provider      ProviderName
+  endpoint      String
+  requestCount  Int          @default(1)
+  status        String
+  estimatedCost Float?
+  createdAt     DateTime     @default(now())
+  researchRun   ResearchRun? @relation(fields: [researchRunId], references: [id], onDelete: SetNull)
+
+  @@index([provider, createdAt])
+}
+
+model DataSourceHealth {
+  id             String               @id @default(cuid())
+  provider       ProviderName          @unique
+  status         ProviderHealthStatus  @default(unknown)
+  latencyMs      Int?
+  lastCheckedAt  DateTime              @default(now())
+  errorMessage   String?
+  detailsJson    Json?
+}
+
+model ScoringSettings {
+  id                          String   @id @default(cuid())
+  name                        String   @unique @default("default")
+  demandWeight                Float    @default(0.25)
+  competitionAdvantageWeight  Float    @default(0.25)
+  commercialWeight            Float    @default(0.20)
+  contentGapWeight            Float    @default(0.20)
+  executionFeasibilityWeight  Float    @default(0.10)
+  minimumEvidenceCount        Int      @default(3)
+  staleAfterDays              Int      @default(30)
+  updatedAt                   DateTime @updatedAt
+  createdAt                   DateTime @default(now())
+}
